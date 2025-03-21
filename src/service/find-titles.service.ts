@@ -21,8 +21,8 @@ export class FindTitlesService {
   }
 
   async execute(): Promise<void> {
-    this.logger.info('findind titles');
-    const limit = 1000;
+    this.logger.info('findind titles to normalize');
+    const limit = 500;
     let offset = 0;
     let hasMore = false;
     let count = 0;
@@ -30,26 +30,25 @@ export class FindTitlesService {
       const rows = await this.getRawTitles(offset, limit);
       hasMore = rows.length > 0;
       if (hasMore) {
-        await this.queue.addBulk(rows.map((row) => ({ name: NORMALIZE_TITLE_JOB_NAME, data: row })));
+        await this.queue.addBulk(
+          rows.map(({ tconst }) => ({
+            name: NORMALIZE_TITLE_JOB_NAME,
+            data: { imdbId: tconst },
+            opts: {
+              deduplication: { id: `${NORMALIZE_TITLE_JOB_NAME}:${tconst}` },
+            },
+          })),
+        );
         offset += limit;
         count += rows.length;
       }
     } while (hasMore);
-    this.logger.info(`${count} titles found`);
+    this.logger.info(`${count} titles founded to normalize`);
   }
 
   private async getRawTitles(offset: number, limit: number) {
     const rows = await this.pg.query(`
-      SELECT 
-        tconst,
-        primarytitle,
-        originaltitle,
-        startyear,
-        endyear,
-        runtimeminutes,
-        genres,
-        titletype,
-        isadult
+      SELECT tconst
       FROM title_basics 
       WHERE titletype in ('movie', 'tvSeries', 'tvMiniSeries') 
       ORDER BY tconst DESC

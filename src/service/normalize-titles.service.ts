@@ -19,36 +19,50 @@ export class NormalizeTitlesService {
     this.mongo = mongo;
   }
 
-  async execute(title): Promise<void> {
-    this.logger.info(`normalizing title ${title.tconst}`);
+  async execute({ imdbId }): Promise<void> {
+    this.logger.debug(`${imdbId} title normalization started`);
     const collection = await this.mongo.getCollection('catalog', 'titles');
+    const rawTitle = await this.getRawTitle(imdbId);
+    this.logger.debug(`${imdbId} title name: ${rawTitle.primarytitle} - ${rawTitle.startyear}`);
     const normalizedTitle = {
-      imdbId: title.tconst,
-      primaryTitle: title.primarytitle,
-      originalTitle: title.originaltitle,
-      startYear: title.startyear,
-      endYear: title.endyear,
-      runtimeMinutes: title.runtimeminutes,
-      titleType: title.titletype,
-      isAdult: title.isadult,
-      genres: title.genres?.split(',') ?? [],
+      imdbId: rawTitle.tconst,
+      primaryTitle: rawTitle.primarytitle,
+      originalTitle: rawTitle.originaltitle,
+      startYear: rawTitle.startyear,
+      endYear: rawTitle.endyear,
+      runtimeMinutes: rawTitle.runtimeminutes,
+      titleType: rawTitle.titletype,
+      isAdult: rawTitle.isadult,
+      genres: rawTitle.genres?.split(',') ?? [],
       ratings: [],
     };
     normalizedTitle.ratings = await this.getRawRatings(normalizedTitle.imdbId);
     if (['tvSeries', 'tvMiniSeries'].includes(normalizedTitle.titleType)) {
       const seasons = await this.getRawSeasons(normalizedTitle.imdbId);
+      this.logger.debug(`${imdbId} title seasons: ${Object.keys(seasons).length}`);
       Object.assign(normalizedTitle, { seasons });
     }
     await collection.updateOne({ imdbId: normalizedTitle.imdbId }, { $set: normalizedTitle }, { upsert: true });
-    this.logger.info(`title ${title.tconst} normalized`);
+    this.logger.info(`${imdbId} title normalization completed`);
+  }
+
+  private async getRawTitle(imdbId: string) {
+    const [row] = await this.pg.query(
+      `
+      SELECT tconst, primarytitle, originaltitle, startyear, endyear, runtimeminutes, titletype, isadult, genres
+      FROM title_basics
+      WHERE tconst = $1
+      LIMIT 1
+    `,
+      [imdbId],
+    );
+    return row;
   }
 
   private async getRawRatings(imdbId: string) {
     const rows = await this.pg.query(
       `
-      SELECT 
-        averagerating,
-        numvotes
+      SELECT averagerating, numvotes
       FROM title_ratings 
       WHERE tconst = $1
       AND averagerating IS NOT NULL
@@ -67,13 +81,7 @@ export class NormalizeTitlesService {
   private async getRawSeasons(imdbId: string) {
     const rows = await this.pg.query(
       `
-      SELECT 
-        te.tconst,
-        te.seasonnumber,
-        te.episodenumber,
-        tb.primarytitle,
-        tb.originaltitle,
-        tb.runtimeminutes
+      SELECT te.tconst, te.seasonnumber, te.episodenumber, tb.primarytitle, tb.originaltitle, tb.runtimeminutes
       FROM title_episode te
       JOIN title_basics AS tb ON te.tconst = tb.tconst
       WHERE te.parenttconst = $1
